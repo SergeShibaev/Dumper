@@ -7,16 +7,18 @@ class Dumper
 private:
 	static const std::string UNKNOWN_FUNCTION;
 	static const std::wstring wUNKNOWN_FUNCTION;
+
 	typedef std::vector<std::wstring> Strings;
 	typedef std::vector<std::pair<std::wstring, std::wstring> > SectionInfo;
 	typedef std::pair<std::wstring, Strings> LibExport;
 	typedef std::vector<LibExport> ImportTable;
 	typedef std::map<std::wstring, std::vector<std::string> > Export;	// dllName -> export functions list : 
 	
-	std::wstring fileName_;
-	ImportTable import_;
-	IMAGE_NT_HEADERS *imageHeader_;
+	HANDLE hFileMap_;
 	LPVOID fileMapAddress_;
+	IMAGE_NT_HEADERS *imageHeader_;
+	std::wstring fileName_;
+	ImportTable import_;	
 	Export exportFuncCache_;
 		
 	typedef std::pair<std::wstring, IMAGE_SECTION_HEADER*> Section;
@@ -25,21 +27,20 @@ private:
 	void Dump();
 	void GetImportTable();
 	void GetDelayImportTable();
-	DWORD GetImageBase(std::wstring fileName);
-	std::string GetDllFunctionNameByOrdinal(std::wstring LibName, WORD ordinal);	
-	std::wstring GetMachineSpecific();
-	Strings GetCharacteristics();
-	std::wstring GetMagic();
-	std::wstring GetSubsystem();
-	Strings GetDllCharacteristic();
-	SectionInfo GetSectionInfo(DWORD id);
-	Strings GetSectionCharacteristics(DWORD id);
+	DWORD GetImageBase(const std::wstring& fileName);
+	std::string GetDllFunctionNameByOrdinal(const std::wstring& LibName, WORD ordinal);	
+	std::wstring GetMachineSpecific() const;
+	Strings GetCharacteristics() const;
+	std::wstring GetMagic() const;
+	std::wstring GetSubsystem() const;
+	Strings GetDllCharacteristic() const;
+	SectionInfo GetSectionInfo(DWORD id) const;
+	Strings GetSectionCharacteristics(DWORD id) const;
 	DWORD RvaToFileOffset(const DWORD rva) const;
-	DWORD RvaToFileOffset(const DWORD rva, const std::vector<Section> sections) const;
-	void GetSectionHeaders(std::vector<Section>& sections);
-	BOOL CheckImportFunction(std::wstring libName, const std::wstring funcName);
+	DWORD RvaToFileOffset(const DWORD rva, const std::vector<Section>& sections) const;
+	BOOL CheckImportFunction(std::wstring& libName, const std::wstring& funcName);
 	void SetCurrentDirectory();
-	void Dumper::GetLibraryExportDirectory(std::wstring libName, std::vector<std::string>& funcList);
+	void GetLibraryExportDirectory(const std::wstring& libName, std::vector<std::string>& funcList);
 public:	
 	Dumper(std::wstring fileName): fileName_(fileName) 
 	{
@@ -68,6 +69,7 @@ public:
 	~Dumper(void) 
 	{
 		UnmapViewOfFile(fileMapAddress_);
+		CloseHandle(hFileMap_);
 	}
 		
 	void ShowData(InfoTable table);

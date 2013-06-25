@@ -7,21 +7,7 @@
 const std::string Dumper::UNKNOWN_FUNCTION = "N/A";
 const std::wstring Dumper::wUNKNOWN_FUNCTION = L"N/A";
 
-void Dumper::Dump()
-{	
-	fileMapAddress_ = (LPVOID)GetImageBase(fileName_);
-	imageHeader_ = ImageNtHeader(fileMapAddress_);
-	if (imageHeader_ == NULL)
-		return;
-	if (imageHeader_->Signature != IMAGE_NT_SIGNATURE)
-		return;
-
-	DWORD	size;
-	for (USHORT i = 0; i < section_.size(); ++i)
-		ImageDirectoryEntryToDataEx(fileMapAddress_, FALSE, i, &size, &section_[i].second);	
-}
-
-DWORD Dumper::GetImageBase(std::wstring fileName)
+DWORD Dumper::GetImageBase(const std::wstring& fileName)
 {
 	HANDLE hFile = CreateFile(fileName.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_READONLY, NULL);
 	if (hFile == INVALID_HANDLE_VALUE)
@@ -39,12 +25,25 @@ DWORD Dumper::GetImageBase(std::wstring fileName)
 			return NULL;
 	}
 
-	HANDLE hFileMap = CreateFileMapping(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
+	hFileMap_ = CreateFileMapping(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
 	CloseHandle(hFile);
-	if (hFileMap == NULL)
+	if (hFileMap_ == NULL)
 		return NULL;
-	return (DWORD)MapViewOfFile(hFileMap, FILE_MAP_READ, 0, 0, 0);
-	//CloseHandle(hFileMap);	
+	return (DWORD)MapViewOfFile(hFileMap_, FILE_MAP_READ, 0, 0, 0);	
+}
+
+void Dumper::Dump()
+{	
+	fileMapAddress_ = (LPVOID)GetImageBase(fileName_);
+	imageHeader_ = ImageNtHeader(fileMapAddress_);
+	if (imageHeader_ == NULL)
+		return;
+	if (imageHeader_->Signature != IMAGE_NT_SIGNATURE)
+		return;
+
+	DWORD	size;
+	for (USHORT i = 0; i < section_.size(); ++i)
+		ImageDirectoryEntryToDataEx(fileMapAddress_, FALSE, i, &size, &section_[i].second);	
 }
 
 DWORD Dumper::RvaToFileOffset(const DWORD rva) const
@@ -52,10 +51,10 @@ DWORD Dumper::RvaToFileOffset(const DWORD rva) const
 	return RvaToFileOffset(rva, section_);
 }
 
-DWORD Dumper::RvaToFileOffset(const DWORD rva, const std::vector<Section> sections) const
+DWORD Dumper::RvaToFileOffset(const DWORD rva, const std::vector<Section>& sections) const
 {
 	try
-	{
+	{		
 		for (USHORT i = 0; i < section_.size(); ++i)
 		{
 			IMAGE_SECTION_HEADER *curSection = sections[i].second;
@@ -74,7 +73,7 @@ DWORD Dumper::RvaToFileOffset(const DWORD rva, const std::vector<Section> sectio
 	}
 }
 
-std::string Dumper::GetDllFunctionNameByOrdinal(std::wstring libName, WORD ordinal)
+std::string Dumper::GetDllFunctionNameByOrdinal(const std::wstring& libName, WORD ordinal)
 {
 	if (exportFuncCache_[libName].size() == 0)
 		GetLibraryExportDirectory(libName, exportFuncCache_[libName]);
@@ -85,7 +84,7 @@ std::string Dumper::GetDllFunctionNameByOrdinal(std::wstring libName, WORD ordin
 		return "Can't get Function name by ordinal";
 }
 
-void Dumper::GetLibraryExportDirectory(std::wstring libName, std::vector<std::string>& funcList)
+void Dumper::GetLibraryExportDirectory(const std::wstring& libName, std::vector<std::string>& funcList)
 {
 	funcList.clear();
 	DWORD baseAddr = GetImageBase(libName);	
@@ -129,7 +128,7 @@ void Dumper::SetCurrentDirectory()
 	::SetCurrentDirectory(curDir);
 }
 
-BOOL Dumper::CheckImportFunction(std::wstring libName, const std::wstring funcName)
+BOOL Dumper::CheckImportFunction(std::wstring& libName, const std::wstring& funcName)
 {
 	if (exportFuncCache_[libName].size() == 0)
 		GetLibraryExportDirectory(libName, exportFuncCache_[libName]);
@@ -142,11 +141,11 @@ void Dumper::GetImportTable()
 {		
 	DWORD baseAddress = (DWORD)fileMapAddress_;	
 	IMAGE_DATA_DIRECTORY importSection = imageHeader_->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
-	if (!importSection.VirtualAddress)
-		return;
 	DWORD importTableRVA = importSection.VirtualAddress;
-	IMAGE_IMPORT_DESCRIPTOR *desc = (IMAGE_IMPORT_DESCRIPTOR*)(baseAddress + RvaToFileOffset(importTableRVA));
-		
+	if (!importTableRVA)
+		return;
+	
+	IMAGE_IMPORT_DESCRIPTOR *desc = (IMAGE_IMPORT_DESCRIPTOR*)(baseAddress + RvaToFileOffset(importTableRVA));	
 	while (desc->Characteristics)
 	{
 		LibExport libExp;
@@ -202,7 +201,7 @@ void Dumper::GetDelayImportTable()
 	import_.push_back(libExp);
 }
 
-std::wstring Dumper::GetMachineSpecific()
+std::wstring Dumper::GetMachineSpecific() const
 {
 	switch (imageHeader_->FileHeader.Machine)
 	{
@@ -213,7 +212,7 @@ std::wstring Dumper::GetMachineSpecific()
 	}
 }
 
-Dumper::Strings Dumper::GetCharacteristics()
+Dumper::Strings Dumper::GetCharacteristics() const
 {
 	Strings result;
 	if (imageHeader_->FileHeader.Characteristics & IMAGE_FILE_RELOCS_STRIPPED)
@@ -250,7 +249,7 @@ Dumper::Strings Dumper::GetCharacteristics()
 	return result;
 }
 
-std::wstring Dumper::GetMagic()
+std::wstring Dumper::GetMagic() const
 {
 	switch (imageHeader_->OptionalHeader.Magic)
 	{
@@ -264,7 +263,7 @@ std::wstring Dumper::GetMagic()
 	}
 }
 
-std::wstring Dumper::GetSubsystem()
+std::wstring Dumper::GetSubsystem() const
 {
 	switch (imageHeader_->OptionalHeader.Subsystem)
 	{
@@ -284,7 +283,7 @@ std::wstring Dumper::GetSubsystem()
 	}
 }
 
-Dumper::Strings Dumper::GetDllCharacteristic()
+Dumper::Strings Dumper::GetDllCharacteristic() const
 {
 	Strings result;
 	if (imageHeader_->OptionalHeader.DllCharacteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE)
@@ -307,7 +306,7 @@ Dumper::Strings Dumper::GetDllCharacteristic()
 	return result;
 }
 
-Dumper::SectionInfo Dumper::GetSectionInfo(DWORD id)
+Dumper::SectionInfo Dumper::GetSectionInfo(DWORD id) const
 {
 	IMAGE_SECTION_HEADER *section = section_[id].second;
 	SectionInfo result;
@@ -329,7 +328,7 @@ Dumper::SectionInfo Dumper::GetSectionInfo(DWORD id)
 	return result;
 }
 
-Dumper::Strings Dumper::GetSectionCharacteristics(DWORD id)
+Dumper::Strings Dumper::GetSectionCharacteristics(DWORD id) const
 {
 	IMAGE_SECTION_HEADER *section = section_[id].second;
 	Strings result;
