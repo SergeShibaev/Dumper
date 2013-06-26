@@ -46,34 +46,7 @@ void Dumper::Dump()
 		ImageDirectoryEntryToDataEx(fileMapAddress_, FALSE, i, &size, &section_[i].second);	
 }
 
-DWORD Dumper::RvaToFileOffset(const DWORD rva) const
-{
-	return RvaToFileOffset(rva, section_);
-}
-
-DWORD Dumper::RvaToFileOffset(const DWORD rva, const std::vector<Section>& sections) const
-{
-	try
-	{		
-		for (USHORT i = 0; i < section_.size(); ++i)
-		{
-			IMAGE_SECTION_HEADER *curSection = sections[i].second;
-			if (curSection &&
-				rva >= curSection->VirtualAddress && 
-				rva < curSection->VirtualAddress + curSection->Misc.VirtualSize)
-			{
-				return rva - curSection->VirtualAddress + curSection->PointerToRawData;
-			}
-		}
-		return rva;
-	}
-	catch (...)
-	{
-		return NULL;		// throw exception
-	}
-}
-
-std::string Dumper::GetDllFunctionNameByOrdinal(const std::wstring& libName, WORD ordinal)
+std::string Dumper::GetDllFunctionNameByOrdinal(const std::wstring& libName, const WORD ordinal)
 {
 	if (exportFuncCache_[libName].size() == 0)
 		GetLibraryExportDirectory(libName, exportFuncCache_[libName]);
@@ -87,26 +60,20 @@ std::string Dumper::GetDllFunctionNameByOrdinal(const std::wstring& libName, WOR
 void Dumper::GetLibraryExportDirectory(const std::wstring& libName, std::vector<std::string>& funcList)
 {
 	funcList.clear();
-	DWORD baseAddr = GetImageBase(libName);	
-	std::vector<Section> sections;
-	sections.resize(15);
-	DWORD	size;
-	for (USHORT i = 0; i < sections.size(); ++i)
-		ImageDirectoryEntryToDataEx((LPVOID)baseAddr, FALSE, i, &size, &sections[i].second);
-	
-	IMAGE_NT_HEADERS *header = ImageNtHeader((LPVOID)baseAddr);
+	DWORD baseAddr = GetImageBase(libName);
+	PIMAGE_NT_HEADERS header = ImageNtHeader((LPVOID)baseAddr);
 	if (header != NULL && header->Signature == IMAGE_NT_SIGNATURE)
 	{
 		IMAGE_DATA_DIRECTORY exports = header->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
 		DWORD rva = exports.VirtualAddress;
-		IMAGE_EXPORT_DIRECTORY *exportTable = (IMAGE_EXPORT_DIRECTORY*)(baseAddr + RvaToFileOffset(rva, sections));
-		DWORD* names = (DWORD*)(baseAddr + RvaToFileOffset(exportTable->AddressOfNames, sections));
-		WORD* ordinals = (WORD*)((DWORD*)(baseAddr + RvaToFileOffset(exportTable->AddressOfNameOrdinals, sections)));
+		PIMAGE_EXPORT_DIRECTORY exportTable = (PIMAGE_EXPORT_DIRECTORY)::ImageRvaToVa(header, (LPVOID)baseAddr, rva, NULL);
+		PDWORD names = (PDWORD)::ImageRvaToVa(header, (LPVOID)baseAddr, exportTable->AddressOfNames, NULL);
+		PWORD ordinals = (PWORD)((PDWORD)::ImageRvaToVa(header, (LPVOID)baseAddr, exportTable->AddressOfNameOrdinals, NULL));
 		funcList.resize(exportTable->NumberOfNames);
 		for (USHORT i = 0; i < exportTable->NumberOfNames; ++i)
 		{			
 			DWORD curNameRva = *names++;						
-			std::string curName = (CHAR*)(baseAddr + RvaToFileOffset(curNameRva, sections));
+			std::string curName = (PCHAR)::ImageRvaToVa(header, (LPVOID)baseAddr, curNameRva, NULL);
 		
 			WORD curOrd = *ordinals++;
 			if (curOrd >= funcList.size())
@@ -138,27 +105,26 @@ BOOL Dumper::CheckImportFunction(std::wstring& libName, const std::wstring& func
 }
 
 void Dumper::GetImportTable()
-{		
-	DWORD baseAddress = (DWORD)fileMapAddress_;	
+{
 	IMAGE_DATA_DIRECTORY importSection = imageHeader_->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
 	DWORD importTableRVA = importSection.VirtualAddress;
 	if (!importTableRVA)
 		return;
 	
-	IMAGE_IMPORT_DESCRIPTOR *desc = (IMAGE_IMPORT_DESCRIPTOR*)(baseAddress + RvaToFileOffset(importTableRVA));	
+	PIMAGE_IMPORT_DESCRIPTOR desc = (PIMAGE_IMPORT_DESCRIPTOR)ImageRvaToVa(importTableRVA);
 	while (desc->Characteristics)
 	{
 		LibExport libExp;
 		try
 		{		
-			CHAR* libName = (CHAR*)(baseAddress + RvaToFileOffset(desc->Name));
+			PCHAR libName = (PCHAR)ImageRvaToVa(desc->Name);
 			libExp.first = Convert(libName);
 						
 			PIMAGE_THUNK_DATA thunkRef;
 			if (desc->OriginalFirstThunk)
-				thunkRef = (PIMAGE_THUNK_DATA)(baseAddress + RvaToFileOffset(desc->OriginalFirstThunk));
+				thunkRef = (PIMAGE_THUNK_DATA)ImageRvaToVa(desc->OriginalFirstThunk);
 			else
-				thunkRef = (PIMAGE_THUNK_DATA)(baseAddress + RvaToFileOffset(desc->FirstThunk));			
+				thunkRef = (PIMAGE_THUNK_DATA)ImageRvaToVa(desc->FirstThunk);
 			while (thunkRef->u1.AddressOfData)
 			{				
 				if (IMAGE_SNAP_BY_ORDINAL(thunkRef->u1.Ordinal)) 
@@ -170,7 +136,7 @@ void Dumper::GetImportTable()
 				}
 				else 
 				{
-					IMAGE_IMPORT_BY_NAME *data = (IMAGE_IMPORT_BY_NAME*)(baseAddress + RvaToFileOffset(thunkRef->u1.AddressOfData));
+					PIMAGE_IMPORT_BY_NAME data = (PIMAGE_IMPORT_BY_NAME)ImageRvaToVa(thunkRef->u1.AddressOfData);
 					/*CHAR funcName[100];
 					strcpy(funcName, data->Name);*/
 					libExp.second.push_back(Convert(data->Name));
@@ -190,9 +156,30 @@ void Dumper::GetImportTable()
 	}
 }
 
+void Dumper::ReadIATDirectory()
+{
+	IMAGE_DATA_DIRECTORY section = imageHeader_->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IAT];
+	if (!section.VirtualAddress)
+		return;
+
+	
+	LibExport le;
+	le.first = L"IAT.dll";
+	import_.push_back(le);
+}
+
+void Dumper::ReadBoundImportTable()
+{	
+	IMAGE_DATA_DIRECTORY section = imageHeader_->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BOUND_IMPORT];	
+	if (!section.VirtualAddress)
+		return;
+	
+	PIMAGE_BOUND_IMPORT_DESCRIPTOR desc = (PIMAGE_BOUND_IMPORT_DESCRIPTOR)ImageRvaToVa(section.VirtualAddress);
+	PCHAR libName = (PCHAR)ImageRvaToVa(section.VirtualAddress + desc->OffsetModuleName);
+}
+
 void Dumper::GetDelayImportTable()
 {
-	DWORD baseAddress = (DWORD)fileMapAddress_;	
 	IMAGE_DATA_DIRECTORY importSection = imageHeader_->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT];
 	if (!importSection.VirtualAddress)
 		return;
