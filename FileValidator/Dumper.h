@@ -25,12 +25,13 @@ private:
 	std::vector<Section> section_;	
 		
 	void Dump();
+	void ReadImportFull();
 	void GetImportTable();
 	void GetDelayImportTable();
 	void ReadBoundImportTable();
 	void ReadIATDirectory();
 	LPVOID ImageRvaToVa(const DWORD rva) { return ::ImageRvaToVa(imageHeader_, fileMapAddress_, rva, NULL); }
-	DWORD GetImageBase(const std::wstring& fileName);
+	DWORD GetImageBase();
 	std::string GetDllFunctionNameByOrdinal(const std::wstring& LibName, const WORD ordinal);	
 	std::wstring GetMachineSpecific() const;
 	Strings GetCharacteristics() const;
@@ -45,7 +46,7 @@ private:
 public:	
 	Dumper(std::wstring fileName): fileName_(fileName) 
 	{
-		section_.resize(15);
+		section_.resize(16);
 		section_[IMAGE_DIRECTORY_ENTRY_EXPORT].first = L"Export directory";
 		section_[IMAGE_DIRECTORY_ENTRY_IMPORT].first = L"Import directory";
 		section_[IMAGE_DIRECTORY_ENTRY_RESOURCE].first = L"Resource directory";
@@ -61,13 +62,10 @@ public:
 		section_[IMAGE_DIRECTORY_ENTRY_IAT].first = L"Import address table";		
 		section_[IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT].first = L"Delay import table";
 		section_[IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR].first = L"COM descriptor table";
+		section_[15].first = L"Reserved";
 		
 		SetCurrentDirectory();
-		Dump();
-		GetImportTable();
-		ReadBoundImportTable();
-		ReadIATDirectory();
-		GetDelayImportTable();
+		Dump();		
 	}
 	~Dumper(void) 
 	{

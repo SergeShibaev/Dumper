@@ -7,12 +7,12 @@
 const std::string Dumper::UNKNOWN_FUNCTION = "N/A";
 const std::wstring Dumper::wUNKNOWN_FUNCTION = L"N/A";
 
-DWORD Dumper::GetImageBase(const std::wstring& fileName)
+DWORD Dumper::GetImageBase()
 {
-	HANDLE hFile = CreateFile(fileName.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_READONLY, NULL);
+	HANDLE hFile = CreateFile(fileName_.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_READONLY, NULL);
 	if (hFile == INVALID_HANDLE_VALUE)
 	{
-		HMODULE    hDll = LoadLibrary(fileName.c_str());
+		HMODULE    hDll = LoadLibrary(fileName_.c_str());
 		if (hDll != NULL)
 		{
 			wchar_t	curFN[MAX_PATH];
@@ -34,16 +34,19 @@ DWORD Dumper::GetImageBase(const std::wstring& fileName)
 
 void Dumper::Dump()
 {	
-	fileMapAddress_ = (LPVOID)GetImageBase(fileName_);
+	fileMapAddress_ = (LPVOID)GetImageBase();
 	imageHeader_ = ImageNtHeader(fileMapAddress_);
 	if (imageHeader_ == NULL)
 		return;
 	if (imageHeader_->Signature != IMAGE_NT_SIGNATURE)
 		return;
 
-	DWORD	size;
+	DWORD  size;
+	LPVOID pData;
 	for (USHORT i = 0; i < section_.size(); ++i)
-		ImageDirectoryEntryToDataEx(fileMapAddress_, FALSE, i, &size, &section_[i].second);	
+	{
+		pData = ImageDirectoryEntryToDataEx(fileMapAddress_, FALSE, i, &size, &section_[i].second);	
+	}
 }
 
 std::string Dumper::GetDllFunctionNameByOrdinal(const std::wstring& libName, const WORD ordinal)
@@ -60,7 +63,8 @@ std::string Dumper::GetDllFunctionNameByOrdinal(const std::wstring& libName, con
 void Dumper::GetLibraryExportDirectory(const std::wstring& libName, std::vector<std::string>& funcList)
 {
 	funcList.clear();
-	DWORD baseAddr = GetImageBase(libName);
+	Dumper libDump(libName);
+	DWORD baseAddr = libDump.GetImageBase();
 	PIMAGE_NT_HEADERS header = ImageNtHeader((LPVOID)baseAddr);
 	if (header != NULL && header->Signature == IMAGE_NT_SIGNATURE)
 	{
@@ -95,6 +99,23 @@ void Dumper::SetCurrentDirectory()
 	::SetCurrentDirectory(curDir);
 }
 
+void Dumper::ReadImportFull()
+{
+	if (imageHeader_->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BOUND_IMPORT].VirtualAddress)
+	{
+		DWORD timeDateStamp = imageHeader_->FileHeader.TimeDateStamp;
+		// bound import only for timeDateStamp equals the same in DLL
+		ReadBoundImportTable();
+	}
+	else
+	{
+		GetImportTable();
+	}
+	/*
+	ReadIATDirectory();
+	GetDelayImportTable();*/
+}
+
 BOOL Dumper::CheckImportFunction(std::wstring& libName, const std::wstring& funcName)
 {
 	if (exportFuncCache_[libName].size() == 0)
@@ -106,12 +127,9 @@ BOOL Dumper::CheckImportFunction(std::wstring& libName, const std::wstring& func
 
 void Dumper::GetImportTable()
 {
-	IMAGE_DATA_DIRECTORY importSection = imageHeader_->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
-	DWORD importTableRVA = importSection.VirtualAddress;
-	if (!importTableRVA)
-		return;
-	
-	PIMAGE_IMPORT_DESCRIPTOR desc = (PIMAGE_IMPORT_DESCRIPTOR)ImageRvaToVa(importTableRVA);
+	DWORD size;
+	LPVOID pData = ImageDirectoryEntryToDataEx(fileMapAddress_, FALSE, IMAGE_DIRECTORY_ENTRY_IMPORT, &size, &section_[IMAGE_DIRECTORY_ENTRY_IMPORT].second);	
+	PIMAGE_IMPORT_DESCRIPTOR desc = (PIMAGE_IMPORT_DESCRIPTOR)pData;
 	while (desc->Characteristics)
 	{
 		LibExport libExp;
@@ -119,31 +137,34 @@ void Dumper::GetImportTable()
 		{		
 			PCHAR libName = (PCHAR)ImageRvaToVa(desc->Name);
 			libExp.first = Convert(libName);
-						
-			PIMAGE_THUNK_DATA thunkRef;
-			if (desc->OriginalFirstThunk)
-				thunkRef = (PIMAGE_THUNK_DATA)ImageRvaToVa(desc->OriginalFirstThunk);
-			else
-				thunkRef = (PIMAGE_THUNK_DATA)ImageRvaToVa(desc->FirstThunk);
-			while (thunkRef->u1.AddressOfData)
-			{				
-				if (IMAGE_SNAP_BY_ORDINAL(thunkRef->u1.Ordinal)) 
-				{
-					std::string funcName = GetDllFunctionNameByOrdinal(libExp.first, IMAGE_ORDINAL(thunkRef->u1.Ordinal));					
-					if (funcName == "")
-						funcName = UNKNOWN_FUNCTION;
-					libExp.second.push_back(Convert(funcName));
-				}
-				else 
-				{
-					PIMAGE_IMPORT_BY_NAME data = (PIMAGE_IMPORT_BY_NAME)ImageRvaToVa(thunkRef->u1.AddressOfData);
-					/*CHAR funcName[100];
-					strcpy(funcName, data->Name);*/
-					libExp.second.push_back(Convert(data->Name));
-				}
+			
+			if (desc->TimeDateStamp == -1)
+			{
+				ReadBoundImportTable();
+			}
+			else 
+			{
+				PIMAGE_THUNK_DATA thunkRef = (PIMAGE_THUNK_DATA)ImageRvaToVa(desc->OriginalFirstThunk);
+				while (thunkRef->u1.AddressOfData)
+				{				
+					if (IMAGE_SNAP_BY_ORDINAL(thunkRef->u1.Ordinal)) 
+					{
+						std::string funcName = GetDllFunctionNameByOrdinal(libExp.first, IMAGE_ORDINAL(thunkRef->u1.Ordinal));					
+						if (funcName == "")
+							funcName = UNKNOWN_FUNCTION;
+						libExp.second.push_back(Convert(funcName));
+					}
+					else 
+					{
+						PIMAGE_IMPORT_BY_NAME data = (PIMAGE_IMPORT_BY_NAME)ImageRvaToVa(thunkRef->u1.AddressOfData);
+						/*CHAR funcName[100];
+						strcpy(funcName, data->Name);*/
+						libExp.second.push_back(Convert(data->Name));
+					}
 
 				
-				thunkRef++;
+					thunkRef++;
+				}
 			}
 		}
 		catch (...)
@@ -477,7 +498,9 @@ void Dumper::ShowSections(InfoTable table)
 }
 
 void Dumper::ShowImportTable(InfoTable table)
-{	
+{
+	ReadImportFull();
+
 	table.DeleteAllItems();
 	for (USHORT i = 0; i < import_.size(); ++i)
 	{
