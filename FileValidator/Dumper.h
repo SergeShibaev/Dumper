@@ -7,13 +7,21 @@ class Dumper
 private:
 	static const std::string UNKNOWN_FUNCTION;
 	static const std::wstring wUNKNOWN_FUNCTION;
+	static const DWORD EMPTY_ORDINAL = 0xFFFFFFFF;
+	static const DWORD EMPTY_HINT = 0xFFFFFFFF;
+
+	typedef struct {
+		std::string name;
+		DWORD ordinal;
+		DWORD hint;
+	} FUNCTION_INFO;
 
 	typedef std::vector<std::wstring> Strings;
 	typedef std::vector<std::pair<std::wstring, std::wstring> > SectionInfo;
-	typedef std::pair<std::wstring, Strings> LibExport;
+	typedef std::pair<std::wstring, std::vector<FUNCTION_INFO> > LibExport;
 	typedef std::vector<LibExport> ImportTable;
 	typedef std::map<std::wstring, std::vector<std::string> > Export;	// dllName -> export functions list : 
-	
+		
 	HANDLE hFileMap_;
 	LPVOID fileMapAddress_;
 	IMAGE_NT_HEADERS *imageHeader_;
@@ -30,7 +38,7 @@ private:
 	void GetDelayImportTable();
 	void ReadBoundImportTable();
 	void ReadIATDirectory();
-	template<typename T> void ReadImportedFunctions(const DWORD rva, const std::wstring& libName, Strings& funcList) const;
+	template<typename T> void ReadImportedFunctions(const DWORD rva, const std::wstring& libName, std::vector<FUNCTION_INFO>& funcList) const;
 	
 	LPVOID ImageRvaToVa(const DWORD rva) const { return ::ImageRvaToVa(imageHeader_, fileMapAddress_, rva, NULL); }
 	void LoadFileAsImage();
@@ -42,7 +50,7 @@ private:
 	Strings GetDllCharacteristic() const;
 	SectionInfo GetSectionInfo(DWORD id) const;
 	Strings GetSectionCharacteristics(DWORD id) const;	
-	BOOL CheckImportFunction(std::wstring& libName, const std::wstring& funcName);
+	BOOL CheckImportFunction(std::wstring& libName, const std::string& funcName);
 	void SetCurrentDirectory();
 	void GetLibraryExportDirectory(const std::wstring& libName, std::vector<std::string>& funcList) const;
 public:	

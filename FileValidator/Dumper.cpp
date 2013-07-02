@@ -112,36 +112,38 @@ void Dumper::ReadImportFull()
 	GetDelayImportTable();*/
 }
 
-BOOL Dumper::CheckImportFunction(std::wstring& libName, const std::wstring& funcName)
+BOOL Dumper::CheckImportFunction(std::wstring& libName, const std::string& funcName)
 {
 	if (exportFuncCache_[libName].size() == 0)
 		GetLibraryExportDirectory(libName, exportFuncCache_[libName]);
 		
-	return (funcName == wUNKNOWN_FUNCTION ||
-		std::find(exportFuncCache_[libName].begin(), exportFuncCache_[libName].end(), Convert(funcName)) != exportFuncCache_[libName].end());
+	return (funcName == UNKNOWN_FUNCTION ||
+		std::find(exportFuncCache_[libName].begin(), exportFuncCache_[libName].end(), funcName) != exportFuncCache_[libName].end());
 }
 
 template<typename T>
-void Dumper::ReadImportedFunctions(const DWORD rva, const std::wstring& libName , Strings& funcList) const
+void Dumper::ReadImportedFunctions(const DWORD rva, const std::wstring& libName , std::vector<FUNCTION_INFO>& funcList) const
 {
-	T thunkRef = (T)ImageRvaToVa(rva);	
+	T thunkRef = (T)ImageRvaToVa(rva);
 	while (thunkRef->u1.AddressOfData)
-	{		
+	{
+		FUNCTION_INFO finfo = { "", EMPTY_ORDINAL, EMPTY_HINT };
 		if (sizeof(thunkRef->u1) == sizeof(IMAGE_THUNK_DATA32) && IMAGE_SNAP_BY_ORDINAL32(thunkRef->u1.Ordinal) ||
 			sizeof(thunkRef->u1) == sizeof(IMAGE_THUNK_DATA64) && IMAGE_SNAP_BY_ORDINAL64(thunkRef->u1.Ordinal))
 		{
 			std::string funcName = GetDllFunctionNameByOrdinal(libName, IMAGE_ORDINAL(thunkRef->u1.Ordinal));
 			if (funcName == "")
 				funcName = UNKNOWN_FUNCTION;
-			funcList.push_back(Convert(funcName));
+			finfo.name = funcName;
+			finfo.ordinal = IMAGE_ORDINAL(thunkRef->u1.Ordinal);
 		}
 		else 
 		{
 			PIMAGE_IMPORT_BY_NAME data = (PIMAGE_IMPORT_BY_NAME)ImageRvaToVa(thunkRef->u1.AddressOfData);
-			/*CHAR funcName[100];
-			strcpy(funcName, data->Name);*/
-			funcList.push_back(Convert(data->Name));
+			finfo.name = data->Name;
+			finfo.hint = data->Hint;
 		}
+		funcList.push_back(finfo);
 		thunkRef++;
 	}
 }
@@ -508,15 +510,27 @@ void Dumper::ShowImportTable(InfoTable table)
 	table.DeleteAllItems();
 	for (USHORT i = 0; i < import_.size(); ++i)
 	{
-		table.AppendItem(L"===== " + import_[i].first + L" =====");
+		if (i > 0) 
+			table.AppendItem(L"");
 		for (USHORT j = 0; j < import_[i].second.size(); ++j)
 		{
-			std::wstring valid;
-			if (CheckImportFunction(import_[i].first, import_[i].second[j]))
-				valid = L"+ ";
+			FUNCTION_INFO func = import_[i].second[j];
+
+			DWORD line = table.GetItemCount();
+			table.AppendItem(import_[i].first);
+			table.InsertSubitem(line, 1, Convert(func.name));
+			if (func.ordinal != EMPTY_ORDINAL)
+				table.InsertSubitem(line, 2, ValueAsHex(func.ordinal));
 			else
-				valid = L"- ";
-			table.AppendItem(valid + import_[i].second[j]);
+				table.InsertSubitem(line, 2, L"");
+			if (func.hint != EMPTY_HINT)
+				table.InsertSubitem(line, 3, ValueAsHex(func.hint));
+			else
+				table.InsertSubitem(line, 3, L"");
+			if (CheckImportFunction(import_[i].first, func.name))
+				table.InsertSubitem(line, 4, L"+");
+			else
+				table.InsertSubitem(line, 4, L"-");
 		}
 	}
 }

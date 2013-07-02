@@ -130,8 +130,11 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
    sections.AddColumn(LVCF_FMT | LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM, LVCFMT_LEFT, 150, L"Section", 5);
 
    importTable = InfoTable(hWnd, wndMain, IDC_SECTIONLIST);
-   importTable.AddColumn(LVCF_FMT | LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM, LVCFMT_LEFT, 400, L"Item", 0);
-   importTable.AddColumn(LVCF_FMT | LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM, LVCFMT_LEFT, 100, L"Value", 1);
+   importTable.AddColumn(LVCF_FMT | LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM, LVCFMT_LEFT, 100, L"Library", 0);
+   importTable.AddColumn(LVCF_FMT | LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM, LVCFMT_LEFT, 200, L"Function", 1);
+   importTable.AddColumn(LVCF_FMT | LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM, LVCFMT_LEFT, 75, L"Ordinal", 2);
+   importTable.AddColumn(LVCF_FMT | LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM, LVCFMT_LEFT, 75, L"Hint", 3);
+   importTable.AddColumn(LVCF_FMT | LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM, LVCFMT_LEFT, 50, L"Valid", 4);
    
    ShowWindow(wndMain, SW_MAXIMIZE);
    return TRUE;
