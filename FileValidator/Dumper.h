@@ -19,7 +19,7 @@ private:
 	IMAGE_NT_HEADERS *imageHeader_;
 	std::wstring fileName_;
 	ImportTable import_;	
-	Export exportFuncCache_;
+	mutable Export exportFuncCache_;
 		
 	typedef std::pair<std::wstring, IMAGE_SECTION_HEADER*> Section;
 	std::vector<Section> section_;	
@@ -30,9 +30,11 @@ private:
 	void GetDelayImportTable();
 	void ReadBoundImportTable();
 	void ReadIATDirectory();
-	LPVOID ImageRvaToVa(const DWORD rva) { return ::ImageRvaToVa(imageHeader_, fileMapAddress_, rva, NULL); }
-	DWORD GetImageBase();
-	std::string GetDllFunctionNameByOrdinal(const std::wstring& LibName, const WORD ordinal);	
+	template<typename T> void ReadImportedFunctions(const DWORD rva, const std::wstring& libName, Strings& funcList) const;
+	
+	LPVOID ImageRvaToVa(const DWORD rva) const { return ::ImageRvaToVa(imageHeader_, fileMapAddress_, rva, NULL); }
+	void LoadFileAsImage();
+	std::string GetDllFunctionNameByOrdinal(const std::wstring& LibName, const WORD ordinal) const;
 	std::wstring GetMachineSpecific() const;
 	Strings GetCharacteristics() const;
 	std::wstring GetMagic() const;
@@ -42,7 +44,7 @@ private:
 	Strings GetSectionCharacteristics(DWORD id) const;	
 	BOOL CheckImportFunction(std::wstring& libName, const std::wstring& funcName);
 	void SetCurrentDirectory();
-	void GetLibraryExportDirectory(const std::wstring& libName, std::vector<std::string>& funcList);
+	void GetLibraryExportDirectory(const std::wstring& libName, std::vector<std::string>& funcList) const;
 public:	
 	Dumper(std::wstring fileName): fileName_(fileName) 
 	{
@@ -65,6 +67,7 @@ public:
 		section_[15].first = L"Reserved";
 		
 		SetCurrentDirectory();
+		LoadFileAsImage();
 		Dump();		
 	}
 	~Dumper(void) 
