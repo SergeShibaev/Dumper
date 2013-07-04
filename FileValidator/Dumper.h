@@ -32,7 +32,7 @@ private:
 	typedef std::pair<std::wstring, IMAGE_SECTION_HEADER*> Section;
 	std::vector<Section> section_;	
 		
-	void Dump();
+	void ReadHeader();
 	void ReadImportFull();
 	void GetImportTable();
 	void GetDelayImportTable();
@@ -40,7 +40,7 @@ private:
 	void ReadIATDirectory();
 	template<typename T> void ReadImportedFunctions(const DWORD rva, const std::wstring& libName, std::vector<FUNCTION_INFO>& funcList) const;
 	
-	LPVOID ImageRvaToVa(const DWORD rva) const { return ::ImageRvaToVa(imageHeader_, fileMapAddress_, rva, NULL); }
+	LPVOID ImageRvaToVa(const ULONG rva) const { return ::ImageRvaToVa(imageHeader_, fileMapAddress_, rva, NULL); }
 	void LoadFileAsImage();
 	std::string GetDllFunctionNameByOrdinal(const std::wstring& LibName, const WORD ordinal) const;
 	std::wstring GetMachineSpecific() const;
@@ -73,18 +73,24 @@ public:
 		section_[IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT].first = L"Delay import table";
 		section_[IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR].first = L"COM descriptor table";
 		section_[15].first = L"Reserved";
-		
-		SetCurrentDirectory();
+
+		fileMapAddress_ = NULL;
+		hFileMap_ = INVALID_HANDLE_VALUE;
+				
 		LoadFileAsImage();
-		Dump();		
+		ReadHeader();		
 	}
 	~Dumper(void) 
 	{
-		UnmapViewOfFile(fileMapAddress_);
-		CloseHandle(hFileMap_);
+		if (fileMapAddress_)
+			UnmapViewOfFile(fileMapAddress_);
+		if (hFileMap_ != INVALID_HANDLE_VALUE)
+			CloseHandle(hFileMap_);
 	}
 		
 	void ShowData(InfoTable table);
 	void ShowSections(InfoTable table);
 	void ShowImportTable(InfoTable table);
+
+	static void SplitPath(const LPWSTR fileName, LPWSTR path, LPWSTR file);
 };

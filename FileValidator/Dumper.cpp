@@ -12,13 +12,21 @@ void Dumper::LoadFileAsImage()
 	HANDLE hFile = CreateFile(fileName_.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_READONLY, NULL);
 	if (hFile == INVALID_HANDLE_VALUE)
 	{
-		HMODULE    hDll = LoadLibrary(fileName_.c_str());
-		if (hDll != NULL)
+		// TODO: resolve why unable to load msvcrt90.dll
+		HMODULE hDll;		
+		if (!GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, fileName_.c_str(), &hDll))
 		{
-			wchar_t	curFN[MAX_PATH];
-			GetModuleFileName(hDll, curFN, MAX_PATH);
-			hFile = CreateFile(curFN, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_READONLY, NULL);
-			if (hFile == INVALID_HANDLE_VALUE)
+			hDll = LoadLibraryEx(fileName_.c_str(), NULL, LOAD_LIBRARY_AS_IMAGE_RESOURCE);
+			if (hDll != NULL)
+			{
+				fileName_.resize(MAX_PATH);
+				GetModuleFileName(hDll, &fileName_[0], MAX_PATH);
+				FreeLibrary(hDll);
+				hFile = CreateFile(fileName_.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_READONLY, NULL);
+				if (hFile == INVALID_HANDLE_VALUE)
+					return;
+			}
+			else
 				return;
 		}
 		else
@@ -32,7 +40,7 @@ void Dumper::LoadFileAsImage()
 	fileMapAddress_ = MapViewOfFile(hFileMap_, FILE_MAP_READ, 0, 0, 0);
 }
 
-void Dumper::Dump()
+void Dumper::ReadHeader()
 {	
 	imageHeader_ = ImageNtHeader(fileMapAddress_);
 	if (imageHeader_ == NULL)
@@ -60,39 +68,58 @@ void Dumper::GetLibraryExportDirectory(const std::wstring& libName, std::vector<
 {
 	funcList.clear();
 	Dumper libDump(libName);
-	LPVOID baseAddr = libDump.fileMapAddress_;
-	PIMAGE_NT_HEADERS header = ImageNtHeader(baseAddr);
-	if (header != NULL && header->Signature == IMAGE_NT_SIGNATURE)
-	{
-		IMAGE_DATA_DIRECTORY exports = header->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
-		DWORD rva = exports.VirtualAddress;
-		PIMAGE_EXPORT_DIRECTORY exportTable = (PIMAGE_EXPORT_DIRECTORY)::ImageRvaToVa(header, baseAddr, rva, NULL);
-		PDWORD names = (PDWORD)::ImageRvaToVa(header, baseAddr, exportTable->AddressOfNames, NULL);
-		PWORD ordinals = (PWORD)((PDWORD)::ImageRvaToVa(header, baseAddr, exportTable->AddressOfNameOrdinals, NULL));
-		funcList.resize(exportTable->NumberOfNames);
-		for (USHORT i = 0; i < exportTable->NumberOfNames; ++i)
-		{			
-			DWORD curNameRva = *names++;						
-			std::string curName = (PCHAR)::ImageRvaToVa(header, (LPVOID)baseAddr, curNameRva, NULL);
+	if (!libDump.imageHeader_)
+		return;
+	
+	DWORD size;
+	LPVOID pData = ImageDirectoryEntryToDataEx(libDump.fileMapAddress_, FALSE, IMAGE_DIRECTORY_ENTRY_EXPORT, &size, NULL);
+	PIMAGE_EXPORT_DIRECTORY exportTable = (PIMAGE_EXPORT_DIRECTORY)pData;
+	PDWORD names = (PDWORD)libDump.ImageRvaToVa(exportTable->AddressOfNames);
+	PWORD ordinals = (PWORD)((PDWORD)libDump.ImageRvaToVa(exportTable->AddressOfNameOrdinals));		
+	funcList.resize(exportTable->NumberOfFunctions + exportTable->Base);
+	for (USHORT i = 0; i < exportTable->NumberOfNames; ++i)
+	{			
+		DWORD curNameRva = *names++;						
+		std::string curName = (PCHAR)libDump.ImageRvaToVa(curNameRva);
 		
-			WORD curOrd = *ordinals++;
-			if (curOrd >= funcList.size())
-				funcList.resize(curOrd+1);
-			funcList[curOrd] = curName;
-		}
+		DWORD curOrd = exportTable->Base + *ordinals++;
+		if (curOrd >= funcList.size())
+			funcList.resize(curOrd+1);
+		funcList[curOrd] = curName;
 	}
+	PULONG functions = (PULONG)libDump.ImageRvaToVa(exportTable->AddressOfFunctions);
+	DWORD exportSection = libDump.imageHeader_->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress;
+	DWORD exportSize = libDump.imageHeader_->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].Size;
+	for (USHORT i = 0; i < exportTable->NumberOfFunctions; ++i)
+	{
+		DWORD funcRva = (DWORD)libDump.ImageRvaToVa(*functions);
+		if (*functions >= exportSection && *functions < exportSection + exportSize)
+			funcList[exportTable->Base + i] = (PCHAR)funcRva;
+		functions++;
+	}
+}
+
+void Dumper::SplitPath(const LPWSTR fileName, LPWSTR path, LPWSTR file)
+{
+	WCHAR drive[5] = { 0 }, dir[MAX_PATH] = { 0 }, fname[MAX_PATH] = { 0 }, ext[MAX_PATH] = { 0 };
+		
+	_wsplitpath_s(fileName, drive, dir, fname, ext);
+	if (path)
+	{
+		StringCchPrintf(path, MAX_PATH, L"%s%s", drive, dir);
+		if (path[wcslen(path)-1] == '\\')
+			path[wcslen(path)-1] = '\0';
+	}
+
+	if (file)
+		StringCchPrintf(file, MAX_PATH, L"%s.%s", fname, ext);
 }
 
 void Dumper::SetCurrentDirectory()
 {
-	WCHAR drive[5] = { 0 }, dir[MAX_PATH] = { 0 }, fname[MAX_PATH] = { 0 }, ext[MAX_PATH] = { 0 };
-	WCHAR curDir[MAX_PATH];
-	
-	_wsplitpath_s(fileName_.c_str(), drive, dir, fname, ext);
-	StringCchPrintf(curDir, MAX_PATH, L"%s%s", drive, dir);
-	if (curDir[wcslen(curDir)-1] == '\\')
-		curDir[wcslen(curDir)-1] = '\0';
-	::SetCurrentDirectory(curDir);
+	WCHAR path[MAX_PATH];
+	SplitPath((LPWSTR)fileName_.c_str(), path, NULL);
+	::SetCurrentDirectory(path);
 }
 
 void Dumper::ReadImportFull()
@@ -114,22 +141,34 @@ void Dumper::ReadImportFull()
 
 BOOL Dumper::CheckImportFunction(std::wstring& libName, const std::string& funcName)
 {
+	// TODO: resolve why some functions like 'ntdll.RtlVirtualUnwind' has not been found in export table or via GetProcAddress
 	if (exportFuncCache_[libName].size() == 0)
 		GetLibraryExportDirectory(libName, exportFuncCache_[libName]);
 		
-	return (funcName == UNKNOWN_FUNCTION ||
-		std::find(exportFuncCache_[libName].begin(), exportFuncCache_[libName].end(), funcName) != exportFuncCache_[libName].end());
+	BOOL funcExists = funcName == UNKNOWN_FUNCTION ||
+		std::find(exportFuncCache_[libName].begin(), exportFuncCache_[libName].end(), funcName) != exportFuncCache_[libName].end();
+
+	if (!funcExists)
+	{
+		HMODULE hDll = LoadLibrary(libName.c_str());
+		LPVOID func = GetProcAddress(hDll, funcName.c_str());
+		funcExists = (func != NULL);
+		FreeLibrary(hDll);
+	}
+	return funcExists;
 }
 
 template<typename T>
 void Dumper::ReadImportedFunctions(const DWORD rva, const std::wstring& libName , std::vector<FUNCTION_INFO>& funcList) const
 {
 	T thunkRef = (T)ImageRvaToVa(rva);
+	BOOL x32 = sizeof(thunkRef->u1) == sizeof(IMAGE_THUNK_DATA32);
+	BOOL x64 = sizeof(thunkRef->u1) == sizeof(IMAGE_THUNK_DATA64);
 	while (thunkRef->u1.AddressOfData)
 	{
 		FUNCTION_INFO finfo = { "", EMPTY_ORDINAL, EMPTY_HINT };
-		if (sizeof(thunkRef->u1) == sizeof(IMAGE_THUNK_DATA32) && IMAGE_SNAP_BY_ORDINAL32(thunkRef->u1.Ordinal) ||
-			sizeof(thunkRef->u1) == sizeof(IMAGE_THUNK_DATA64) && IMAGE_SNAP_BY_ORDINAL64(thunkRef->u1.Ordinal))
+		if (x32 && IMAGE_SNAP_BY_ORDINAL32(thunkRef->u1.Ordinal) ||
+			x64 && IMAGE_SNAP_BY_ORDINAL64(thunkRef->u1.Ordinal))
 		{
 			std::string funcName = GetDllFunctionNameByOrdinal(libName, IMAGE_ORDINAL(thunkRef->u1.Ordinal));
 			if (funcName == "")
@@ -139,7 +178,7 @@ void Dumper::ReadImportedFunctions(const DWORD rva, const std::wstring& libName 
 		}
 		else 
 		{
-			PIMAGE_IMPORT_BY_NAME data = (PIMAGE_IMPORT_BY_NAME)ImageRvaToVa(thunkRef->u1.AddressOfData);
+			PIMAGE_IMPORT_BY_NAME data = (PIMAGE_IMPORT_BY_NAME)ImageRvaToVa(thunkRef->u1.AddressOfData & 0xFFFFFFFF);
 			finfo.name = data->Name;
 			finfo.hint = data->Hint;
 		}
@@ -151,7 +190,7 @@ void Dumper::ReadImportedFunctions(const DWORD rva, const std::wstring& libName 
 void Dumper::GetImportTable()
 {
 	DWORD size;
-	LPVOID pData = ImageDirectoryEntryToDataEx(fileMapAddress_, FALSE, IMAGE_DIRECTORY_ENTRY_IMPORT, &size, &section_[IMAGE_DIRECTORY_ENTRY_IMPORT].second);	
+	LPVOID pData = ImageDirectoryEntryToDataEx(fileMapAddress_, FALSE, IMAGE_DIRECTORY_ENTRY_IMPORT, &size, NULL);	
 	PIMAGE_IMPORT_DESCRIPTOR desc = (PIMAGE_IMPORT_DESCRIPTOR)pData;
 	while (desc->Characteristics)
 	{
@@ -169,8 +208,10 @@ void Dumper::GetImportTable()
 			{
 				if (imageHeader_->FileHeader.Machine == IMAGE_FILE_MACHINE_I386)
 					ReadImportedFunctions<PIMAGE_THUNK_DATA32>(desc->OriginalFirstThunk, libExp.first, libExp.second);
-				else
+				else if (imageHeader_->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64)
 					ReadImportedFunctions<PIMAGE_THUNK_DATA64>(desc->OriginalFirstThunk, libExp.first, libExp.second);
+				else
+					continue;
 			}
 		}
 		catch (...)

@@ -169,6 +169,10 @@ BOOL GetOpenFileName(HWND hWnd, std::wstring& fileName)
 
 void Dump(std::wstring fileName)
 {
+	WCHAR curDir[MAX_PATH];
+	Dumper::SplitPath((LPWSTR)fileName.c_str(), curDir, NULL);
+	SetCurrentDirectory(curDir);
+	
 	Dumper dumper(fileName);
 	dumper.ShowData(table);
 	dumper.ShowSections(sections);	
