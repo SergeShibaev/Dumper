@@ -1,5 +1,6 @@
 #pragma once
 #include "InfoTable.h"
+#include "Logger.h"
 #include <DbgHelp.h>
 
 class Dumper
@@ -21,7 +22,7 @@ private:
 	typedef std::pair<std::wstring, std::vector<FUNCTION_INFO> > LibExport;
 	typedef std::vector<LibExport> ImportTable;
 	typedef std::map<std::wstring, std::vector<std::string> > Export;	// dllName -> export functions list : 
-		
+	
 	HANDLE hFileMap_;
 	LPVOID fileMapAddress_;
 	IMAGE_NT_HEADERS *imageHeader_;
@@ -30,15 +31,19 @@ private:
 	mutable Export exportFuncCache_;
 		
 	typedef std::pair<std::wstring, IMAGE_SECTION_HEADER*> Section;
-	std::vector<Section> section_;	
-		
+	std::vector<Section> section_;
+
+	mutable Logger logger_;
+	
 	void ReadHeader();
+	std::wstring GetFullFileName(const std::wstring& fileName) const;
 	void ReadImportFull();
 	void GetImportTable();
 	void GetDelayImportTable();
 	void ReadBoundImportTable();
 	void ReadIATDirectory();
-	template<typename T> void ReadImportedFunctions(const DWORD rva, const std::wstring& libName, std::vector<FUNCTION_INFO>& funcList) const;
+	template<typename T> void ReadImportedFunctions(const DWORD rva, const std::wstring& libName, std::vector<FUNCTION_INFO>& funcList) const;	
+	//void ListSystemKnownDlls() const;     // move to the SystemInfo class
 	
 	LPVOID ImageRvaToVa(const ULONG rva) const { return ::ImageRvaToVa(imageHeader_, fileMapAddress_, rva, NULL); }
 	void LoadFileAsImage();
@@ -50,11 +55,12 @@ private:
 	Strings GetDllCharacteristic() const;
 	SectionInfo GetSectionInfo(DWORD id) const;
 	Strings GetSectionCharacteristics(DWORD id) const;	
-	BOOL CheckImportFunction(std::wstring& libName, const std::string& funcName);
+	BOOL CheckImportFunction(std::wstring& libName, const std::string& funcName) const;
 	void SetCurrentDirectory();
 	void GetLibraryExportDirectory(const std::wstring& libName, std::vector<std::string>& funcList) const;
+	// TODO: if import has function for create file or write registry values Dumper should find all filenames and keys/values
 public:	
-	Dumper(std::wstring fileName): fileName_(fileName) 
+	Dumper(std::wstring fileName, BOOL logging): fileName_(fileName) 
 	{
 		section_.resize(16);
 		section_[IMAGE_DIRECTORY_ENTRY_EXPORT].first = L"Export directory";
@@ -76,9 +82,17 @@ public:
 
 		fileMapAddress_ = NULL;
 		hFileMap_ = INVALID_HANDLE_VALUE;
+
+		if (logging)
+		{
+			WCHAR file[MAX_PATH];
+			SplitPath(&fileName_[0], NULL, file);
+			std::wstring logFileName = L"dumper_" + std::wstring(file) + L".log";
+			logger_.SetLogFile(logFileName);
+		}
 				
 		LoadFileAsImage();
-		ReadHeader();		
+		ReadHeader();
 	}
 	~Dumper(void) 
 	{
@@ -91,6 +105,7 @@ public:
 	void ShowData(InfoTable table);
 	void ShowSections(InfoTable table);
 	void ShowImportTable(InfoTable table);
+	void CheckDependencies() const;
 
 	static void SplitPath(const LPWSTR fileName, LPWSTR path, LPWSTR file);
 };

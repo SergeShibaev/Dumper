@@ -24,5 +24,6 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <deque>
 #include <Strsafe.h>
 #include "Dumper.h"

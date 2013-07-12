@@ -173,10 +173,11 @@ void Dump(std::wstring fileName)
 	Dumper::SplitPath((LPWSTR)fileName.c_str(), curDir, NULL);
 	SetCurrentDirectory(curDir);
 	
-	Dumper dumper(fileName);
+	Dumper dumper(fileName, TRUE);
 	dumper.ShowData(table);
 	dumper.ShowSections(sections);	
 	dumper.ShowImportTable(importTable);
+	dumper.CheckDependencies();
 }
 
 //

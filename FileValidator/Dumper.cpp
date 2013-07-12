@@ -1,42 +1,53 @@
 #include "stdafx.h"
 #include "Dumper.h"
 #include "StrUtils.h"
+#include <Psapi.h>
+#include <stdexcept>
 
 #pragma comment(lib, "DbgHelp.lib")
 
 const std::string Dumper::UNKNOWN_FUNCTION = "N/A";
 const std::wstring Dumper::wUNKNOWN_FUNCTION = L"N/A";
 
-void Dumper::LoadFileAsImage()
+std::wstring Dumper::GetFullFileName(const std::wstring& fileName) const
 {
+	// TODO: find path to the side-by-side components like comctl32.dll and gdiplus.dll by reading version from registry
+	std::wstring fullFileName;
+
+	HANDLE hFile = CreateFile(fileName.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_READONLY, NULL);
+	if (hFile != INVALID_HANDLE_VALUE)
+	{
+		fullFileName = fileName;
+		CloseHandle(hFile);
+	}
+	else 
+	{
+		fullFileName.resize(MAX_PATH);
+		SearchPath(NULL, fileName.c_str(), NULL, MAX_PATH, &fullFileName[0], NULL);		
+	}
+	
+	return fullFileName;
+}
+
+void Dumper::LoadFileAsImage()
+{	
+	fileName_ = GetFullFileName(fileName_);
+
 	HANDLE hFile = CreateFile(fileName_.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_READONLY, NULL);
 	if (hFile == INVALID_HANDLE_VALUE)
 	{
-		// TODO: resolve why unable to load msvcrt90.dll
-		HMODULE hDll;		
-		if (!GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, fileName_.c_str(), &hDll))
-		{
-			hDll = LoadLibraryEx(fileName_.c_str(), NULL, LOAD_LIBRARY_AS_IMAGE_RESOURCE);
-			if (hDll != NULL)
-			{
-				fileName_.resize(MAX_PATH);
-				GetModuleFileName(hDll, &fileName_[0], MAX_PATH);
-				FreeLibrary(hDll);
-				hFile = CreateFile(fileName_.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_READONLY, NULL);
-				if (hFile == INVALID_HANDLE_VALUE)
-					return;
-			}
-			else
-				return;
-		}
-		else
-			return;
+		logger_.AddLog(L"ОШИБКА при загрузке файла: " + fileName_);
+		return;
 	}
+	logger_.AddLog(L"Загружен файл: " + fileName_);
 
 	hFileMap_ = CreateFileMapping(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
 	CloseHandle(hFile);
 	if (hFileMap_ == NULL)
+	{
+		logger_.AddLog(L"ОШИБКА при отображении файла в память: " + fileName_);
 		return;
+	}
 	fileMapAddress_ = MapViewOfFile(hFileMap_, FILE_MAP_READ, 0, 0, 0);
 }
 
@@ -44,9 +55,15 @@ void Dumper::ReadHeader()
 {	
 	imageHeader_ = ImageNtHeader(fileMapAddress_);
 	if (imageHeader_ == NULL)
+	{
+		logger_.AddLog(L"ОШИБКА: Заголовок NT пустой");
 		return;
+	}
 	if (imageHeader_->Signature != IMAGE_NT_SIGNATURE)
+	{
+		logger_.AddLog(L"ОШИБКА: Сигнатура NT отсутствует");
 		return;
+	}
 
 	DWORD  size;
 	for (USHORT i = 0; i < section_.size(); ++i)
@@ -67,9 +84,12 @@ std::string Dumper::GetDllFunctionNameByOrdinal(const std::wstring& libName, con
 void Dumper::GetLibraryExportDirectory(const std::wstring& libName, std::vector<std::string>& funcList) const
 {
 	funcList.clear();
-	Dumper libDump(libName);
+	Dumper libDump(libName, FALSE);
 	if (!libDump.imageHeader_)
+	{
+		logger_.AddLog(L"ОШИБКА: Не удалось загрузить библиотеку " + libDump.fileName_ + L" для чтения секции эскпорта");
 		return;
+	}
 	
 	DWORD size;
 	LPVOID pData = ImageDirectoryEntryToDataEx(libDump.fileMapAddress_, FALSE, IMAGE_DIRECTORY_ENTRY_EXPORT, &size, NULL);
@@ -85,7 +105,7 @@ void Dumper::GetLibraryExportDirectory(const std::wstring& libName, std::vector<
 		DWORD curOrd = exportTable->Base + *ordinals++;
 		if (curOrd >= funcList.size())
 			funcList.resize(curOrd+1);
-		funcList[curOrd] = curName;
+		funcList[curOrd] = curName;		
 	}
 	PULONG functions = (PULONG)libDump.ImageRvaToVa(exportTable->AddressOfFunctions);
 	DWORD exportSection = libDump.imageHeader_->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress;
@@ -112,7 +132,7 @@ void Dumper::SplitPath(const LPWSTR fileName, LPWSTR path, LPWSTR file)
 	}
 
 	if (file)
-		StringCchPrintf(file, MAX_PATH, L"%s.%s", fname, ext);
+		StringCchPrintf(file, MAX_PATH, L"%s%s", fname, ext);
 }
 
 void Dumper::SetCurrentDirectory()
@@ -135,11 +155,11 @@ void Dumper::ReadImportFull()
 		GetImportTable();
 	}
 	/*
-	ReadIATDirectory();
-	GetDelayImportTable();*/
+	ReadIATDirectory();*/
+	GetDelayImportTable();
 }
 
-BOOL Dumper::CheckImportFunction(std::wstring& libName, const std::string& funcName)
+BOOL Dumper::CheckImportFunction(std::wstring& libName, const std::string& funcName) const
 {
 	// TODO: resolve why some functions like 'ntdll.RtlVirtualUnwind' has not been found in export table or via GetProcAddress
 	if (exportFuncCache_[libName].size() == 0)
@@ -155,6 +175,7 @@ BOOL Dumper::CheckImportFunction(std::wstring& libName, const std::string& funcN
 		funcExists = (func != NULL);
 		FreeLibrary(hDll);
 	}
+
 	return funcExists;
 }
 
@@ -163,7 +184,7 @@ void Dumper::ReadImportedFunctions(const DWORD rva, const std::wstring& libName 
 {
 	T thunkRef = (T)ImageRvaToVa(rva);
 	BOOL x32 = sizeof(thunkRef->u1) == sizeof(IMAGE_THUNK_DATA32);
-	BOOL x64 = sizeof(thunkRef->u1) == sizeof(IMAGE_THUNK_DATA64);
+	BOOL x64 = sizeof(thunkRef->u1) == sizeof(IMAGE_THUNK_DATA64);	
 	while (thunkRef->u1.AddressOfData)
 	{
 		FUNCTION_INFO finfo = { "", EMPTY_ORDINAL, EMPTY_HINT };
@@ -189,38 +210,28 @@ void Dumper::ReadImportedFunctions(const DWORD rva, const std::wstring& libName 
 
 void Dumper::GetImportTable()
 {
+	logger_.AddLog(L"Чтение таблицы импорта процесса...");
+
 	DWORD size;
-	LPVOID pData = ImageDirectoryEntryToDataEx(fileMapAddress_, FALSE, IMAGE_DIRECTORY_ENTRY_IMPORT, &size, NULL);	
-	PIMAGE_IMPORT_DESCRIPTOR desc = (PIMAGE_IMPORT_DESCRIPTOR)pData;
-	while (desc->Characteristics)
+	PIMAGE_IMPORT_DESCRIPTOR desc = (PIMAGE_IMPORT_DESCRIPTOR)ImageDirectoryEntryToDataEx(fileMapAddress_, FALSE, IMAGE_DIRECTORY_ENTRY_IMPORT, &size, NULL);
+	while (desc && desc->Characteristics)
 	{
 		LibExport libExp;
-		try
-		{		
-			PCHAR libName = (PCHAR)ImageRvaToVa(desc->Name);
-			libExp.first = Convert(libName);
-			
-			if (desc->TimeDateStamp == -1)
-			{
-				ReadBoundImportTable();
-			}
-			else 
-			{
-				if (imageHeader_->FileHeader.Machine == IMAGE_FILE_MACHINE_I386)
-					ReadImportedFunctions<PIMAGE_THUNK_DATA32>(desc->OriginalFirstThunk, libExp.first, libExp.second);
-				else if (imageHeader_->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64)
-					ReadImportedFunctions<PIMAGE_THUNK_DATA64>(desc->OriginalFirstThunk, libExp.first, libExp.second);
-				else
-					continue;
-			}
-		}
-		catch (...)
-		{
-			libExp.first = L"ERROR";
-		}	
-		
+		PCHAR libName = (PCHAR)ImageRvaToVa(desc->Name);
+		libExp.first = Convert(libName);
+						
+		if (imageHeader_->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC)
+			ReadImportedFunctions<PIMAGE_THUNK_DATA32>(desc->OriginalFirstThunk, libExp.first, libExp.second);
+		else if (imageHeader_->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+			ReadImportedFunctions<PIMAGE_THUNK_DATA64>(desc->OriginalFirstThunk, libExp.first, libExp.second);
+				
 		import_.push_back(libExp);		
 		desc++;
+
+		WCHAR msg[MAX_PATH + 50] = { 0 };			
+		StringCchPrintf(msg, MAX_PATH + 50, L"%ls -> импортировано функций: %d", 
+			GetFullFileName(libExp.first).c_str(), libExp.second.size());
+		logger_.AddLog(msg);
 	}
 }
 
@@ -237,7 +248,7 @@ void Dumper::ReadIATDirectory()
 }
 
 void Dumper::ReadBoundImportTable()
-{	
+{		
 	IMAGE_DATA_DIRECTORY section = imageHeader_->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BOUND_IMPORT];	
 	if (!section.VirtualAddress)
 		return;
@@ -248,12 +259,74 @@ void Dumper::ReadBoundImportTable()
 
 void Dumper::GetDelayImportTable()
 {
-	IMAGE_DATA_DIRECTORY importSection = imageHeader_->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT];
-	if (!importSection.VirtualAddress)
-		return;
-	LibExport libExp;
-	libExp.first = L"DelayImport.dll";
-	import_.push_back(libExp);
+	DWORD size;
+	PIMAGE_DELAYLOAD_DESCRIPTOR desc = (PIMAGE_DELAYLOAD_DESCRIPTOR)ImageDirectoryEntryToDataEx(fileMapAddress_, FALSE, IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT, &size, NULL);
+	
+	while (desc && desc->Attributes.AllAttributes)
+	{
+		LibExport libExp;
+		PCHAR libName = (PCHAR)ImageRvaToVa(desc->DllNameRVA);
+		libExp.first = Convert(libName);
+
+		if (imageHeader_->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC)
+			ReadImportedFunctions<PIMAGE_THUNK_DATA32>(desc->ImportNameTableRVA, libExp.first, libExp.second);
+		else if (imageHeader_->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR64_MAGIC)
+			ReadImportedFunctions<PIMAGE_THUNK_DATA64>(desc->ImportNameTableRVA, libExp.first, libExp.second);
+		
+		import_.push_back(libExp);
+		desc++;
+	}
+}
+
+void Dumper::CheckDependencies() const
+{
+	logger_.AddLog(L"\nПроверка зависимостей...");
+	std::deque<std::wstring> libs;
+	std::vector<std::wstring> checked;
+	
+	for (USHORT i = 0; i < import_.size(); ++i)
+	{		
+		std::wstring libName = import_[i].first;
+		libs.push_back(libName);
+		for (USHORT j = 0; j < import_[i].second.size(); ++j)
+		{
+			std::string funcName = import_[i].second[j].name;
+			if (!CheckImportFunction(libName, funcName))
+				logger_.AddLog(L"ОШИБКА: не удалось получить адрес функции: " + libName + L"." + Convert(funcName));
+		}
+	}
+
+	while (libs.size())
+	{
+		std::wstring libName = libs[0];
+		libs.pop_front();
+
+		if (std::find(checked.begin(), checked.end(), libName) != checked.end())
+			continue;
+
+		Dumper lib(libName, FALSE);
+		lib.ReadImportFull();
+		if (lib.import_.size() != 0)
+			logger_.AddLog(L"\n" + libName);
+		
+		for (USHORT i = 0; i < lib.import_.size(); ++i)
+		{
+			std::wstring impLibName = lib.import_[i].first;
+			logger_.AddLog(L"|__" + GetFullFileName(impLibName));
+			libs.push_back(impLibName);
+
+			for (USHORT j = 0; j < lib.import_[i].second.size(); ++j)
+			{
+				std::string funcName = lib.import_[i].second[j].name;
+				if (!CheckImportFunction(impLibName, funcName))
+					logger_.AddLog(L"|____ ОШИБКА: не удалось получить адрес функции " + Convert(funcName));
+			}
+		}
+		
+
+		checked.push_back(libName);
+		
+	}
 }
 
 std::wstring Dumper::GetMachineSpecific() const
@@ -547,12 +620,13 @@ void Dumper::ShowSections(InfoTable table)
 void Dumper::ShowImportTable(InfoTable table)
 {
 	ReadImportFull();
-
+	
 	table.DeleteAllItems();
 	for (USHORT i = 0; i < import_.size(); ++i)
 	{
 		if (i > 0) 
 			table.AppendItem(L"");
+
 		for (USHORT j = 0; j < import_[i].second.size(); ++j)
 		{
 			FUNCTION_INFO func = import_[i].second[j];
