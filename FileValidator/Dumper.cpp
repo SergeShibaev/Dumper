@@ -66,8 +66,8 @@ void Dumper::ReadHeader()
 	}
 
 	DWORD  size;
-	for (USHORT i = 0; i < section_.size(); ++i)
-		ImageDirectoryEntryToDataEx(fileMapAddress_, FALSE, i, &size, &section_[i].second);
+	for (USHORT i = 0; i < IMAGE_NUMBEROF_DIRECTORY_ENTRIES; ++i)
+		ImageDirectoryEntryToDataEx(fileMapAddress_, FALSE, i, &size, &section_[i]);
 }
 
 std::string Dumper::GetDllFunctionNameByOrdinal(const std::wstring& libName, const WORD ordinal) const
@@ -84,7 +84,7 @@ std::string Dumper::GetDllFunctionNameByOrdinal(const std::wstring& libName, con
 void Dumper::GetLibraryExportDirectory(const std::wstring& libName, std::vector<std::string>& funcList) const
 {
 	funcList.clear();
-	Dumper libDump(libName, FALSE);
+	Dumper libDump(libName, FALSE, FALSE);
 	if (!libDump.imageHeader_)
 	{
 		logger_.AddLog(L"ОШИБКА: Не удалось загрузить библиотеку " + libDump.fileName_ + L" для чтения секции эскпорта");
@@ -154,12 +154,10 @@ void Dumper::ReadImportFull()
 	{
 		GetImportTable();
 	}
-	/*
-	ReadIATDirectory();*/
 	GetDelayImportTable();
 }
 
-BOOL Dumper::CheckImportFunction(std::wstring& libName, const std::string& funcName) const
+BOOL Dumper::CheckImportFunction(const std::wstring& libName, const std::string& funcName) const
 {
 	// TODO: resolve why some functions like 'ntdll.RtlVirtualUnwind' has not been found in export table or via GetProcAddress
 	if (exportFuncCache_[libName].size() == 0)
@@ -170,10 +168,12 @@ BOOL Dumper::CheckImportFunction(std::wstring& libName, const std::string& funcN
 
 	if (!funcExists)
 	{
-		HMODULE hDll = LoadLibrary(libName.c_str());
-		LPVOID func = GetProcAddress(hDll, funcName.c_str());
-		funcExists = (func != NULL);
-		FreeLibrary(hDll);
+		HMODULE hDll = GetModuleHandle(libName.c_str());
+		if (hDll != NULL)
+		{
+			LPVOID func = GetProcAddress(hDll, funcName.c_str());
+			funcExists = (func != NULL);
+		}
 	}
 
 	return funcExists;
@@ -278,22 +278,27 @@ void Dumper::GetDelayImportTable()
 	}
 }
 
-void Dumper::CheckDependencies() const
+void Dumper::CheckDependencies()
 {
 	logger_.AddLog(L"\nПроверка зависимостей...");
 	std::deque<std::wstring> libs;
 	std::vector<std::wstring> checked;
+	std::vector<std::wstring> errors;
 	
 	for (USHORT i = 0; i < import_.size(); ++i)
 	{		
 		std::wstring libName = import_[i].first;
 		libs.push_back(libName);
+
+		std::vector<std::string> funcList;
 		for (USHORT j = 0; j < import_[i].second.size(); ++j)
 		{
 			std::string funcName = import_[i].second[j].name;
 			if (!CheckImportFunction(libName, funcName))
-				logger_.AddLog(L"ОШИБКА: не удалось получить адрес функции: " + libName + L"." + Convert(funcName));
+				errors.push_back(L"!!! не удалось получить адрес функции: " + libName + L"!" + Convert(funcName));
+			funcList.push_back(funcName);
 		}
+		libraries_[GetFullFileName(libName)] = funcList;
 	}
 
 	while (libs.size())
@@ -304,7 +309,7 @@ void Dumper::CheckDependencies() const
 		if (std::find(checked.begin(), checked.end(), libName) != checked.end())
 			continue;
 
-		Dumper lib(libName, FALSE);
+		Dumper lib(libName, FALSE, FALSE);
 		lib.ReadImportFull();
 		if (lib.import_.size() != 0)
 			logger_.AddLog(L"\n" + libName);
@@ -312,21 +317,27 @@ void Dumper::CheckDependencies() const
 		for (USHORT i = 0; i < lib.import_.size(); ++i)
 		{
 			std::wstring impLibName = lib.import_[i].first;
-			logger_.AddLog(L"|__" + GetFullFileName(impLibName));
+			std::wstring fullName = GetFullFileName(impLibName);
+			logger_.AddLog(L"|__" + fullName);
 			libs.push_back(impLibName);
-
+			
+			std::vector<std::string> funcList;
 			for (USHORT j = 0; j < lib.import_[i].second.size(); ++j)
 			{
 				std::string funcName = lib.import_[i].second[j].name;
+				funcList.push_back(funcName);
 				if (!CheckImportFunction(impLibName, funcName))
-					logger_.AddLog(L"|____ ОШИБКА: не удалось получить адрес функции " + Convert(funcName));
+					errors.push_back(L"!!! не удалось получить адрес функции " + impLibName + L"!" + Convert(funcName));
 			}
+			libraries_[fullName] = funcList;
 		}
-		
 
-		checked.push_back(libName);
-		
+		checked.push_back(libName);		
 	}
+
+	logger_.AddLog(L"\nОШИБКИ");
+	for (size_t i = 0; i < errors.size(); ++i)
+		logger_.AddLog(errors[i]);
 }
 
 std::wstring Dumper::GetMachineSpecific() const
@@ -436,7 +447,7 @@ Dumper::Strings Dumper::GetDllCharacteristic() const
 
 Dumper::SectionInfo Dumper::GetSectionInfo(DWORD id) const
 {
-	IMAGE_SECTION_HEADER *section = section_[id].second;
+	PIMAGE_SECTION_HEADER section = section_[id];
 	SectionInfo result;
 	if (section != NULL)
 	{
@@ -458,7 +469,7 @@ Dumper::SectionInfo Dumper::GetSectionInfo(DWORD id) const
 
 Dumper::Strings Dumper::GetSectionCharacteristics(DWORD id) const
 {
-	IMAGE_SECTION_HEADER *section = section_[id].second;
+	PIMAGE_SECTION_HEADER section = section_[id];
 	Strings result;
 	if (section != NULL)
 	{
@@ -535,16 +546,16 @@ std::wstring GetJoinedVersion(DWORD major, DWORD minor)
 	return version;
 }
 
-void Dumper::ShowData(InfoTable table)
+void Dumper::ShowHeader(InfoTable& table) const
 {		
 	table.DeleteAllItems();
-	table.AppendItem(L"===== IMAGE_NT_HEADER");
+	table.AppendItem(L"___IMAGE_NT_HEADER___");
 	WCHAR signature[20] = { 0 };
 	StringCchPrintf(signature, 20, L"%c%c   (0x%X)", 
 		(char)(imageHeader_->Signature & 0xFF), (char)(imageHeader_->Signature >> 8), imageHeader_->Signature);
 	table.AppendItem(L"Signature", signature);
 	
-	table.AppendItem(L"===== IMAGE_FILE_HEADER");
+	table.AppendItem(L"___IMAGE_FILE_HEADER___");
 	IMAGE_FILE_HEADER ifh = imageHeader_->FileHeader;
 	table.AppendItem(L"Machine", GetMachineSpecific());
 	table.AppendItem(L"NumberOfSections", ifh.NumberOfSections);
@@ -559,7 +570,7 @@ void Dumper::ShowData(InfoTable table)
 		table.AppendItem(L"", characteristics[i]);
 
 	IMAGE_OPTIONAL_HEADER ioh = imageHeader_->OptionalHeader;
-	table.AppendItem(L"===== IMAGE_OPTIONAL_HEADER");
+	table.AppendItem(L"___IMAGE_OPTIONAL_HEADER___");
 	table.AppendItem(L"Magic", ioh.Magic);
 	table.AppendItem(L"", GetMagic());
 	table.AppendItem(L"LinkerVersion", GetJoinedVersion(ioh.MajorLinkerVersion, ioh.MinorLinkerVersion));	
@@ -596,31 +607,73 @@ void Dumper::ShowData(InfoTable table)
 	table.AppendItem(L"SizeOfHeapCommit", ioh.SizeOfHeapCommit);
 	table.AppendItem(L"LoaderFlags", ioh.LoaderFlags);
 	table.AppendItem(L"NumberOfRvaAndSizes", ioh.NumberOfRvaAndSizes);	
+	table.Update();
 }
 
-void Dumper::ShowSections(InfoTable table)
+void Dumper::ShowSections(InfoTable& table) const
 {
 	table.DeleteAllItems();
 	for (USHORT i = 0; i < section_.size(); ++i)
 	{
-		IMAGE_SECTION_HEADER *section = section_[i].second;
+		PIMAGE_SECTION_HEADER section = section_[i];
 		if (section == NULL)
 			continue;
 				
 		DWORD line = table.GetItemCount();
-		table.AppendItem(ValueAsHex(i));
-		table.InsertSubitem(line, 1, Convert(reinterpret_cast<CHAR*>(section->Name)));
-		table.InsertSubitem(line, 2, ValueAsHex(section->Misc.VirtualSize));
-		table.InsertSubitem(line, 3, ValueAsHex(section->VirtualAddress));		
-		table.InsertSubitem(line, 4, ValueAsHex(section->PointerToRawData));
-		table.InsertSubitem(line, 5, section_[i].first);
+		table.AppendItem(ValueAsStr(i));
+		table.InsertSubitem(line, 1, Convert(reinterpret_cast<PCHAR>(section->Name)));		
+		table.InsertSubitem(line, 2, ValueAsHex(section->VirtualAddress));
+		table.InsertSubitem(line, 3, ValueAsHex(section->Misc.VirtualSize));
+		table.InsertSubitem(line, 4, ValueAsHex(section->PointerToRawData));		
+	}
+	table.Update();
+}
+
+void Dumper::ShowDataDirs(InfoTable& table) const
+{
+	table.DeleteAllItems();
+	for (size_t i = 0; i < IMAGE_NUMBEROF_DIRECTORY_ENTRIES; ++i)
+	{
+		IMAGE_DATA_DIRECTORY idd = imageHeader_->OptionalHeader.DataDirectory[i];
+		if (idd.Size == 0 || idd.VirtualAddress == 0)
+			continue;
+
+		DWORD line = table.GetItemCount();
+		table.AppendItem(ValueAsStr(i));
+		table.InsertSubitem(line, 1, dataDirDesc_[i]);
+		table.InsertSubitem(line, 2, ValueAsHex(idd.VirtualAddress));
+		table.InsertSubitem(line, 3, ValueAsHex(idd.Size));
+
+		for (size_t j = 0; j < section_.size(); ++j)
+		{
+			PIMAGE_SECTION_HEADER section = section_[j];
+			if (!section)
+				continue;
+			if (idd.VirtualAddress >= section->VirtualAddress &&
+				idd.VirtualAddress < section->VirtualAddress + section->Misc.VirtualSize)
+			{
+				table.InsertSubitem(line, 4, ValueAsStr(j) + L"   " + 
+					Convert(reinterpret_cast<PCHAR>(section->Name)));
+				break;
+			}
+		}		
+	}
+	table.Update();
+}
+
+void Dumper::ShowLibraries(InfoTable& table) const
+{
+	table.DeleteAllItems();
+	FuncList::const_iterator it = libraries_.begin();
+	while (it != libraries_.end())
+	{
+		table.AppendItem(it->first);
+		++it;
 	}
 }
 
-void Dumper::ShowImportTable(InfoTable table)
+void Dumper::ShowImportTable(InfoTable& table) const
 {
-	ReadImportFull();
-	
 	table.DeleteAllItems();
 	for (USHORT i = 0; i < import_.size(); ++i)
 	{
@@ -647,5 +700,6 @@ void Dumper::ShowImportTable(InfoTable table)
 			else
 				table.InsertSubitem(line, 4, L"-");
 		}
+		table.Update();
 	}
 }

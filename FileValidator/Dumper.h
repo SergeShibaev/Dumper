@@ -21,23 +21,24 @@ private:
 	typedef std::vector<std::pair<std::wstring, std::wstring> > SectionInfo;
 	typedef std::pair<std::wstring, std::vector<FUNCTION_INFO> > LibExport;
 	typedef std::vector<LibExport> ImportTable;
-	typedef std::map<std::wstring, std::vector<std::string> > Export;	// dllName -> export functions list : 
-	
+	typedef std::map<std::wstring, std::vector<std::string> > FuncList;	// dllName -> export functions list : 
+		
 	HANDLE hFileMap_;
 	LPVOID fileMapAddress_;
-	IMAGE_NT_HEADERS *imageHeader_;
+	PIMAGE_NT_HEADERS imageHeader_;
 	std::wstring fileName_;
 	ImportTable import_;	
-	mutable Export exportFuncCache_;
-		
-	typedef std::pair<std::wstring, IMAGE_SECTION_HEADER*> Section;
-	std::vector<Section> section_;
+	mutable FuncList exportFuncCache_;
+			
+	std::vector<PIMAGE_SECTION_HEADER> section_;
+	Strings dataDirDesc_;
+	FuncList libraries_;
 
 	mutable Logger logger_;
-	
+		
 	void ReadHeader();
 	std::wstring GetFullFileName(const std::wstring& fileName) const;
-	void ReadImportFull();
+	void ReadImportFull();	
 	void GetImportTable();
 	void GetDelayImportTable();
 	void ReadBoundImportTable();
@@ -55,30 +56,32 @@ private:
 	Strings GetDllCharacteristic() const;
 	SectionInfo GetSectionInfo(DWORD id) const;
 	Strings GetSectionCharacteristics(DWORD id) const;	
-	BOOL CheckImportFunction(std::wstring& libName, const std::string& funcName) const;
+	BOOL CheckImportFunction(const std::wstring& libName, const std::string& funcName) const;
 	void SetCurrentDirectory();
 	void GetLibraryExportDirectory(const std::wstring& libName, std::vector<std::string>& funcList) const;
 	// TODO: if import has function for create file or write registry values Dumper should find all filenames and keys/values
 public:	
-	Dumper(std::wstring fileName, BOOL logging): fileName_(fileName) 
+	Dumper(std::wstring fileName, BOOL logging, BOOL wImport): fileName_(fileName) 
 	{
-		section_.resize(16);
-		section_[IMAGE_DIRECTORY_ENTRY_EXPORT].first = L"Export directory";
-		section_[IMAGE_DIRECTORY_ENTRY_IMPORT].first = L"Import directory";
-		section_[IMAGE_DIRECTORY_ENTRY_RESOURCE].first = L"Resource directory";
-		section_[IMAGE_DIRECTORY_ENTRY_EXCEPTION].first = L"Exception directory";
-		section_[IMAGE_DIRECTORY_ENTRY_SECURITY].first = L"Security directory";		
-		section_[IMAGE_DIRECTORY_ENTRY_BASERELOC].first = L"Base relocation table";
-		section_[IMAGE_DIRECTORY_ENTRY_DEBUG].first = L"Debug directory";
-		section_[IMAGE_DIRECTORY_ENTRY_ARCHITECTURE].first = L"Architecture-specific data";
-		section_[IMAGE_DIRECTORY_ENTRY_GLOBALPTR].first = L"The relative virtual address of global pointer";
-		section_[IMAGE_DIRECTORY_ENTRY_TLS].first = L"Thread local storage directory";
-		section_[IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG].first = L"Load configuration directory";
-		section_[IMAGE_DIRECTORY_ENTRY_BOUND_IMPORT].first = L"Bound import directory";
-		section_[IMAGE_DIRECTORY_ENTRY_IAT].first = L"Import address table";		
-		section_[IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT].first = L"Delay import table";
-		section_[IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR].first = L"COM descriptor table";
-		section_[15].first = L"Reserved";
+		section_.resize(IMAGE_NUMBEROF_DIRECTORY_ENTRIES);
+		dataDirDesc_.resize(IMAGE_NUMBEROF_DIRECTORY_ENTRIES);
+
+		dataDirDesc_[IMAGE_DIRECTORY_ENTRY_EXPORT] = L"Export directory";
+		dataDirDesc_[IMAGE_DIRECTORY_ENTRY_IMPORT] = L"Import directory";
+		dataDirDesc_[IMAGE_DIRECTORY_ENTRY_RESOURCE] = L"Resource directory";
+		dataDirDesc_[IMAGE_DIRECTORY_ENTRY_EXCEPTION] = L"Exception directory";
+		dataDirDesc_[IMAGE_DIRECTORY_ENTRY_SECURITY] = L"Security directory";		
+		dataDirDesc_[IMAGE_DIRECTORY_ENTRY_BASERELOC] = L"Base relocation table";
+		dataDirDesc_[IMAGE_DIRECTORY_ENTRY_DEBUG] = L"Debug directory";
+		dataDirDesc_[IMAGE_DIRECTORY_ENTRY_ARCHITECTURE] = L"Architecture-specific data";
+		dataDirDesc_[IMAGE_DIRECTORY_ENTRY_GLOBALPTR] = L"The relative virtual address of global pointer";
+		dataDirDesc_[IMAGE_DIRECTORY_ENTRY_TLS] = L"Thread local storage directory";
+		dataDirDesc_[IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG] = L"Load configuration directory";
+		dataDirDesc_[IMAGE_DIRECTORY_ENTRY_BOUND_IMPORT] = L"Bound import directory";
+		dataDirDesc_[IMAGE_DIRECTORY_ENTRY_IAT] = L"Import address table";		
+		dataDirDesc_[IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT] = L"Delay import table";
+		dataDirDesc_[IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR] = L"COM descriptor table";
+		dataDirDesc_[15] = L"Reserved";
 
 		fileMapAddress_ = NULL;
 		hFileMap_ = INVALID_HANDLE_VALUE;
@@ -93,6 +96,9 @@ public:
 				
 		LoadFileAsImage();
 		ReadHeader();
+
+		if (wImport)
+			ReadImportFull();
 	}
 	~Dumper(void) 
 	{
@@ -100,12 +106,15 @@ public:
 			UnmapViewOfFile(fileMapAddress_);
 		if (hFileMap_ != INVALID_HANDLE_VALUE)
 			CloseHandle(hFileMap_);
+		logger_.Save();
 	}
 		
-	void ShowData(InfoTable table);
-	void ShowSections(InfoTable table);
-	void ShowImportTable(InfoTable table);
-	void CheckDependencies() const;
+	void ShowHeader(InfoTable& table) const;
+	void ShowSections(InfoTable& table) const;
+	void ShowDataDirs(InfoTable& table) const;
+	void ShowImportTable(InfoTable& table) const;
+	void ShowLibraries(InfoTable& table) const;
+	void CheckDependencies();
 
 	static void SplitPath(const LPWSTR fileName, LPWSTR path, LPWSTR file);
 };

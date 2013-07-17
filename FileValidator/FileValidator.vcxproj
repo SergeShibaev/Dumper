@@ -22,6 +22,7 @@
     <ProjectGuid>{3F59A608-4F62-4575-A04D-2180039AC5B8}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
     <RootNamespace>FileValidator</RootNamespace>
+    <ProjectName>FakeDW</ProjectName>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
@@ -69,6 +70,7 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <LinkIncremental>true</LinkIncremental>
     <GenerateManifest>false</GenerateManifest>
+    <RunCodeAnalysis>true</RunCodeAnalysis>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <LinkIncremental>true</LinkIncremental>
@@ -86,6 +88,7 @@
       <Optimization>Disabled</Optimization>
       <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
+      <EnablePREfast>true</EnablePREfast>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -112,12 +115,14 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
-      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <GenerateDebugInformation>false</GenerateDebugInformation>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
+      <OutputFile>$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -141,19 +146,23 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Dumper.h" />
-    <ClInclude Include="FileValidator.h" />
+    <ClInclude Include="FakeDW.h" />
+    <ClInclude Include="GUIControl.h" />
     <ClInclude Include="InfoTable.h" />
     <ClInclude Include="Logger.h" />
     <ClInclude Include="Resource.h" />
+    <ClInclude Include="StatusBar.h" />
     <ClInclude Include="stdafx.h" />
     <ClInclude Include="StrUtils.h" />
     <ClInclude Include="targetver.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Dumper.cpp" />
-    <ClCompile Include="FileValidator.cpp" />
+    <ClCompile Include="FakeDW.cpp" />
+    <ClCompile Include="GUIControl.cpp" />
     <ClCompile Include="InfoTable.cpp" />
     <ClCompile Include="Logger.cpp" />
+    <ClCompile Include="StatusBar.cpp" />
     <ClCompile Include="stdafx.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Create</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Create</PrecompiledHeader>
@@ -162,10 +171,10 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ResourceCompile Include="FileValidator.rc" />
+    <ResourceCompile Include="FakeDW.rc" />
   </ItemGroup>
   <ItemGroup>
-    <Image Include="FileValidator.ico" />
+    <Image Include="FakeDW.ico" />
     <Image Include="small.ico" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

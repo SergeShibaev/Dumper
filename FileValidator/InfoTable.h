@@ -29,4 +29,5 @@ public:
 	{
 		ListView_DeleteAllItems(hTable_);
 	}
+	void Update() { UpdateWindow(hTable_); }
 };

@@ -2,8 +2,9 @@
 //
 
 #include "stdafx.h"
-#include "FileValidator.h"
+#include "FakeDW.h"
 #include "InfoTable.h"
+#include "GUIControl.h"
 
 #define MAX_LOADSTRING 100
 
@@ -12,7 +13,7 @@ HINSTANCE hInst;								// current instance
 TCHAR szTitle[MAX_LOADSTRING];					// The title bar text
 TCHAR szWindowClass[MAX_LOADSTRING];			// the main window class name
 HWND wndMain;
-InfoTable table, sections, importTable;
+InfoTable table, dirs, sections, libs, importTable;
 
 // Forward declarations of functions included in this code module:
 ATOM				MyRegisterClass(HINSTANCE hInstance);
@@ -115,27 +116,38 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
    UpdateWindow(hWnd);
 
    wndMain = CreateDialog(NULL, MAKEINTRESOURCE(IDD_MAINDIALOG), hWnd, MainWndProc);
-   ResizeAllItems(hWnd, wndMain);
-
+   
+   DWORD stText = LVCF_FMT | LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
+   
    table = InfoTable(hWnd, wndMain, IDC_TABLE);
-   table.AddColumn(LVCF_FMT | LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM, LVCFMT_LEFT, 200, L"Item", 0);
-   table.AddColumn(LVCF_FMT | LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM, LVCFMT_LEFT, 350, L"Value", 1);
+   table.AddColumn(stText, LVCFMT_LEFT, 200, L"Item", 0);
+   table.AddColumn(stText, LVCFMT_LEFT, 300, L"Value", 1);
+   
+   dirs = InfoTable(hWnd, wndMain, IDC_DIRS);
+   dirs.AddColumn(stText, LVCFMT_LEFT, 20, L"N", 0);
+   dirs.AddColumn(stText, LVCFMT_LEFT, 250, L"Директория", 1);
+   dirs.AddColumn(stText, LVCFMT_RIGHT, 85, L"Адрес", 2);
+   dirs.AddColumn(stText, LVCFMT_RIGHT, 60, L"Размер", 3);
+   dirs.AddColumn(stText, LVCFMT_LEFT, 80, L"Секция", 4);   
 
    sections = InfoTable(hWnd, wndMain, IDC_SECTIONS);
-   sections.AddColumn(LVCF_FMT | LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM, LVCFMT_LEFT, 25, L"ID", 0);
-   sections.AddColumn(LVCF_FMT | LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM, LVCFMT_LEFT, 75, L"Name", 1);
-   sections.AddColumn(LVCF_FMT | LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM, LVCFMT_RIGHT, 80, L"VirtualSize", 2);
-   sections.AddColumn(LVCF_FMT | LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM, LVCFMT_RIGHT, 85, L"VirtualAddress", 3);   
-   sections.AddColumn(LVCF_FMT | LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM, LVCFMT_RIGHT, 105, L"PointerToRawData", 4);
-   sections.AddColumn(LVCF_FMT | LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM, LVCFMT_LEFT, 150, L"Section", 5);
+   sections.AddColumn(stText, LVCFMT_LEFT, 25, L"ID", 0);
+   sections.AddColumn(stText, LVCFMT_LEFT, 50, L"Секция", 1);
+   sections.AddColumn(stText, LVCFMT_RIGHT, 85, L"VirtualAddress", 2);
+   sections.AddColumn(stText, LVCFMT_RIGHT, 80, L"VirtualSize", 3);   
+   sections.AddColumn(stText, LVCFMT_RIGHT, 105, L"PointerToRawData", 4);
+   
+   libs = InfoTable(hWnd, wndMain, IDC_LIBRARIES);
+   libs.AddColumn(stText, LVCFMT_LEFT, 500, L"Библиотека", 0);
 
    importTable = InfoTable(hWnd, wndMain, IDC_SECTIONLIST);
-   importTable.AddColumn(LVCF_FMT | LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM, LVCFMT_LEFT, 100, L"Library", 0);
-   importTable.AddColumn(LVCF_FMT | LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM, LVCFMT_LEFT, 200, L"Function", 1);
-   importTable.AddColumn(LVCF_FMT | LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM, LVCFMT_LEFT, 75, L"Ordinal", 2);
-   importTable.AddColumn(LVCF_FMT | LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM, LVCFMT_LEFT, 75, L"Hint", 3);
-   importTable.AddColumn(LVCF_FMT | LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM, LVCFMT_LEFT, 50, L"Valid", 4);
-   
+   importTable.AddColumn(stText, LVCFMT_LEFT, 100, L"Библиотека", 0);
+   importTable.AddColumn(stText, LVCFMT_LEFT, 200, L"Функция", 1);
+   importTable.AddColumn(stText, LVCFMT_LEFT, 75, L"Ordinal", 2);
+   importTable.AddColumn(stText, LVCFMT_LEFT, 75, L"Hint", 3);
+   importTable.AddColumn(stText, LVCFMT_LEFT, 50, L"Проверка", 4);
+
+   ResizeAllItems(hWnd, wndMain);
    ShowWindow(wndMain, SW_MAXIMIZE);
    return TRUE;
 }
@@ -173,11 +185,13 @@ void Dump(std::wstring fileName)
 	Dumper::SplitPath((LPWSTR)fileName.c_str(), curDir, NULL);
 	SetCurrentDirectory(curDir);
 	
-	Dumper dumper(fileName, TRUE);
-	dumper.ShowData(table);
+	Dumper dumper(fileName, TRUE, TRUE);
+	dumper.ShowHeader(table);
 	dumper.ShowSections(sections);	
+	dumper.ShowDataDirs(dirs);	
 	dumper.ShowImportTable(importTable);
 	dumper.CheckDependencies();
+	dumper.ShowLibraries(libs);
 }
 
 //
@@ -249,25 +263,58 @@ INT_PTR CALLBACK MainWndProc(HWND hDlg, UINT message, WPARAM wParam, LPARAM lPar
 
 void ResizeAllItems(HWND hWnd, HWND mainWnd)
 {
-	RECT rMain, rInfo, rSections;
-	HWND hTabs = GetDlgItem(mainWnd, IDC_TABS);
-	HWND hInfoTable = GetDlgItem(mainWnd, IDC_TABLE);
-	HWND hSectionsTable = GetDlgItem(mainWnd, IDC_SECTIONS);
-	HWND hImport = GetDlgItem(mainWnd, IDC_SECTIONLIST);
+	if (!hWnd || !mainWnd)
+		return;
 	
-	GetClientRect(hWnd, &rMain);	
-	MoveWindow(mainWnd, 0, 0, rMain.right, rMain.bottom, TRUE); 
-
-	GetClientRect(mainWnd, &rMain);	
-	MoveWindow(hTabs, 0, 0, rMain.right, rMain.bottom, TRUE);
+	RECT r;
+	GetClientRect(hWnd, &r);
 	
-	DWORD wMain = rMain.right - rMain.left;
-	DWORD hMain = rMain.bottom - rMain.top;
-	MoveWindow(hInfoTable, 0, 0, wMain / 2, hMain, TRUE);
+	GUIControl main(mainWnd, r.right, r.bottom);
+	main.Move(0, 0);
+	
+	// left pane
+	DWORD lcHeight = main.height();
+	DWORD lcWidth = main.width()/2;
+	GUIControl stHeader(GetDlgItem(mainWnd, IDC_STATICHEADER), lcWidth, 15);
+	stHeader.Move(0, 0);
+	lcHeight -= stHeader.height();
+	
+	GUIControl tblDirs(GetDlgItem(mainWnd, IDC_DIRS), lcWidth, 150);
+	tblDirs.Move(0, main.height()-tblDirs.height());
+	lcHeight -= tblDirs.height();
 
-	GetClientRect(hInfoTable, &rInfo);
-	MoveWindow(hSectionsTable, rInfo.right + 1, 0, wMain / 2 - 1, 200, TRUE);
+	GUIControl stDirs(GetDlgItem(mainWnd, IDC_STATICDIRS), lcWidth, 15);	
+	stDirs.Move(0, tblDirs.GetTop()-stDirs.height());
+	lcHeight -= stDirs.height();
 
-	GetClientRect(hSectionsTable, &rSections);
-	MoveWindow(hImport, rInfo.right + 1, 200, wMain / 2 - 1, hMain - 200, TRUE);
+	GUIControl tblSections(GetDlgItem(mainWnd, IDC_SECTIONS), lcWidth, 150);
+	tblSections.Move(0, stDirs.GetTop()-tblSections.height());
+	lcHeight -= tblSections.height();
+	
+	GUIControl stSections(GetDlgItem(mainWnd, IDC_STATICSECTIONS), lcWidth, 15);
+	stSections.Move(0, tblSections.GetTop()-stSections.height());
+	lcHeight -= stSections.height();
+
+	GUIControl tblHeader(GetDlgItem(mainWnd, IDC_TABLE), main.width()/2, lcHeight);
+	tblHeader.left(0)->Move(0, stHeader.GetBottom());
+
+	// right pane
+	DWORD rcHeight = main.height();
+	DWORD rcLeft = main.width()/2;
+	DWORD rcWidth = main.width()/2;
+	
+	GUIControl stLibs(GetDlgItem(mainWnd, IDC_STATICLIBRARIES), rcWidth, 15);
+	stLibs.Move(rcLeft, 0);
+	rcHeight -= stLibs.height();
+
+	GUIControl tblLibs(GetDlgItem(mainWnd, IDC_LIBRARIES), rcWidth, 200);
+	tblLibs.Move(rcLeft, stLibs.GetBottom());
+	rcHeight -= tblLibs.height();
+
+	GUIControl stDepends(GetDlgItem(mainWnd, IDC_STATICDEPENDS), rcWidth, 15);
+	stDepends.Move(rcLeft, tblLibs.GetBottom());
+	rcHeight -= stDepends.height();
+
+	GUIControl tblImport(GetDlgItem(mainWnd, IDC_IMPORT), rcWidth, rcHeight);
+	tblImport.Move(rcLeft, stDepends.GetBottom());
 }
